@@ -1,0 +1,5 @@
+<!-- res/xml/watch_face.xml -->
+<wallpaper xmlns:android="http://schemas.android.com/apk/res/android"
+    android:thumbnail="@drawable/preview_analog"
+    android:description="@string/watch_face_description"
+    android:settingsActivity="com.example.watchface.SettingsActivity" />
