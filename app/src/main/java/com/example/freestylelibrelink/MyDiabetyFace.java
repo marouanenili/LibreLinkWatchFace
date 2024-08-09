@@ -262,7 +262,7 @@ public class MyDiabetyFace extends CanvasWatchFaceService {
             float TimeY = canvas.getHeight() / 4f;
             String DateText = String.format("%02d/%02d/%04d",
                     mCalendar.get(Calendar.DAY_OF_MONTH),
-                    mCalendar.get(Calendar.MONTH),
+                    mCalendar.get(Calendar.MONTH + 1),
                     mCalendar.get(Calendar.YEAR));
             float DateX = canvas.getWidth() / 2f;
             float DateY = canvas.getHeight() / 1.5f;
