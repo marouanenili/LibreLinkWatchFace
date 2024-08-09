@@ -1,3 +1,13 @@
+# LiberlinkupWatchFace
+
+**LiberlinkupWatchFace** est une application simple pour smartwatch Android qui affiche le niveau de glycémie, la date et l'heure sur un écran minimaliste. L'application est conçue pour offrir une solution claire et directe pour suivre les informations essentielles en un coup d'œil.
+
+## Fonctionnalités
+
+- **Affichage du niveau de glycémie** : Suivez votre glycémie en temps réel directement sur l'écran de votre montre.
+- **Affichage de la date et de l'heure** : Affiche en permanence la date et l'heure actuelles.
+- **Design minimaliste** : Un arrière-plan noir simple pour une lisibilité optimale.
+
 ## Installation
 
 1. Clonez le dépôt sur votre machine locale :
