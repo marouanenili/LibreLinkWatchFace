@@ -14,6 +14,7 @@ import java.util.zip.GZIPInputStream;
 
 public class ApiManager {
 
+    // API endpoint URLs
     private static final String BASE_URL = "https://api-fr.libreview.io"; // Pour l'Europe, utiliser "https://api.libreview.io"
     private static final String LOGIN_ENDPOINT = "/llu/auth/login";
     private static final String CONNECTIONS_ENDPOINT = "/llu/connections";
@@ -22,20 +23,14 @@ public class ApiManager {
     // Headers
     private static final String CONTENT_TYPE = "application/json";
     private static final String PRODUCT = "llu.android";
-    private static final String VERSION = "4.7";
+    private static final String VERSION = "4.12.0";
+
 
     // Function to log in and retrieve JWT token
-    public static String login(String email, String password) throws IOException, JSONException {
+    public JSONObject getLoginResponse(String email, String password) throws IOException, JSONException {
         URL url = new URL(BASE_URL + LOGIN_ENDPOINT);
         HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-        conn.setRequestMethod("POST");
-        conn.setRequestProperty("accept-encoding", "gzip");
-        conn.setRequestProperty("cache-control", "no-cache");
-        conn.setRequestProperty("connection", "Keep-Alive");
-        conn.setRequestProperty("content-type", CONTENT_TYPE);
-        conn.setRequestProperty("product", PRODUCT);
-        conn.setRequestProperty("version", VERSION);
-        conn.setDoOutput(true);
+        conn = setHeader("POST", conn, null, null);
 
         JSONObject jsonPayload = new JSONObject();
         jsonPayload.put("email", email);
@@ -43,55 +38,55 @@ public class ApiManager {
 
         conn.getOutputStream().write(jsonPayload.toString().getBytes());
 
-        BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getInputStream()));
+        // Check if response is GZIP-encoded
+        InputStream inputStream;
+        String encoding = conn.getContentEncoding();
+        if (encoding != null && encoding.equalsIgnoreCase("gzip")) {
+            inputStream = new GZIPInputStream(conn.getInputStream());
+        } else {
+            inputStream = conn.getInputStream();
+        }
+
+        BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream));
         StringBuilder response = new StringBuilder();
         String line;
         while ((line = reader.readLine()) != null) {
             response.append(line);
         }
         reader.close();
-
+        System.out.println("Response: " + response.toString());
         JSONObject jsonResponse = new JSONObject(response.toString());
-        JSONObject authTicket = jsonResponse.getJSONObject("data").getJSONObject("authTicket");
-        return authTicket.getString("token");
+        return jsonResponse;
     }
 
     // Function to get connections of patients
-    public static JSONArray getPatientConnections(String token) throws IOException, JSONException {
+    public JSONObject getConnectionsResponse(String token, String patientIdSha256) throws IOException, JSONException {
         URL url = new URL(BASE_URL + CONNECTIONS_ENDPOINT);
         HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-        conn.setRequestMethod("GET");
-        conn.setRequestProperty("accept-encoding", "gzip");
-        conn.setRequestProperty("cache-control", "no-cache");
-        conn.setRequestProperty("connection", "Keep-Alive");
-        conn.setRequestProperty("content-type", CONTENT_TYPE);
-        conn.setRequestProperty("product", PRODUCT);
-        conn.setRequestProperty("version", VERSION);
-        conn.setRequestProperty("Authorization", "Bearer " + token);
+        conn = setHeader("GET", conn, token, patientIdSha256);
 
-        BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getInputStream()));
+        InputStream inputStream;
+        if ("gzip".equals(conn.getHeaderField("Content-Encoding"))) {
+            inputStream = new GZIPInputStream(conn.getInputStream());
+        } else {
+            inputStream = conn.getInputStream();
+        }
+
+        BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream));
         StringBuilder response = new StringBuilder();
         String line;
         while ((line = reader.readLine()) != null) {
             response.append(line);
         }
         reader.close();
-
-        return new JSONObject(response.toString()).getJSONArray("data");
+        return new JSONObject(response.toString());
     }
 
     // Function to retrieve CGM data for a specific patient
-    public static JSONObject getCGMData(String token, String patientId) throws IOException, JSONException {
-        URL url = new URL(BASE_URL + String.format(CGM_DATA_ENDPOINT, patientId));
+    public JSONObject getGraphData(String token, String patientidSha256, String patientid) throws IOException, JSONException {
+        URL url = new URL(BASE_URL + String.format(CGM_DATA_ENDPOINT, patientid));
         HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-        conn.setRequestMethod("GET");
-        conn.setRequestProperty("accept-encoding", "gzip");
-        conn.setRequestProperty("cache-control", "no-cache");
-        conn.setRequestProperty("connection", "Keep-Alive");
-        conn.setRequestProperty("content-type", CONTENT_TYPE);
-        conn.setRequestProperty("product", PRODUCT);
-        conn.setRequestProperty("version", VERSION);
-        conn.setRequestProperty("Authorization", "Bearer " + token);
+        conn = setHeader("GET", conn, token, patientidSha256);
         InputStream inputStream;
         if ("gzip".equals(conn.getContentEncoding())) {
             inputStream = new GZIPInputStream(conn.getInputStream());
@@ -109,5 +104,21 @@ public class ApiManager {
         return new JSONObject(response.toString());
     }
 
+    private HttpURLConnection setHeader(String method, HttpURLConnection conn, String token, String accountId) throws IOException {
+        conn.setRequestMethod(method);
+        conn.setRequestProperty("accept-encoding", "gzip");
+        conn.setRequestProperty("cache-control", "no-cache");
+        conn.setRequestProperty("connection", "Keep-Alive");
+        conn.setRequestProperty("content-type", CONTENT_TYPE);
+        conn.setRequestProperty("product", PRODUCT);
+        conn.setRequestProperty("version", VERSION);
+        if (token != null) {
+            conn.setRequestProperty("Authorization", "Bearer " + token);
+        }
+        if (accountId != null) {
+            conn.setRequestProperty("account-id", accountId);
+        }
+        return conn;
+    }
 
 }

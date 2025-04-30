@@ -4,8 +4,10 @@ import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.Rect;
+import android.os.BatteryManager;
 import android.os.Bundle;
 import android.os.Handler;
+import android.os.Looper;
 import android.os.Message;
 import android.support.wearable.watchface.CanvasWatchFaceService;
 import android.support.wearable.watchface.WatchFaceService;
@@ -13,7 +15,6 @@ import android.support.wearable.watchface.WatchFaceStyle;
 import android.view.SurfaceHolder;
 
 import org.json.JSONException;
-import org.json.JSONObject;
 
 import java.io.IOException;
 import java.lang.ref.WeakReference;
@@ -22,12 +23,16 @@ import java.util.TimeZone;
 import java.util.concurrent.TimeUnit;
 
 public class MyDiabetyFace extends CanvasWatchFaceService {
-    private ApiManager apiManager;
 
     private static final long INTERACTIVE_UPDATE_RATE_MS = TimeUnit.SECONDS.toMillis(1);
     private static final int MSG_UPDATE_TIME = 0;
-    private static final long UPDATE_INTERVAL_MS = 60000; // 1 minute en millisecondes
-    private final Handler mHandler = new Handler();
+    private static final long UPDATE_INTERVAL_MS = 600000; // 10 minutes
+
+    private final Handler mainHandler = new Handler(Looper.getMainLooper());
+
+    private ApiManager apiManager;
+    private CredentialsManager credentialsManager;
+    private GlucoseManager glucoseManager;
 
     @Override
     public Engine onCreateEngine() {
@@ -37,151 +42,157 @@ public class MyDiabetyFace extends CanvasWatchFaceService {
     private static class EngineHandler extends Handler {
         private final WeakReference<Engine> mWeakReference;
 
-        public EngineHandler(MyDiabetyFace.Engine reference) {
+        public EngineHandler(Engine reference) {
             mWeakReference = new WeakReference<>(reference);
         }
 
         @Override
         public void handleMessage(Message msg) {
-            MyDiabetyFace.Engine engine = mWeakReference.get();
-            if (engine != null) {
-                switch (msg.what) {
-                    case MSG_UPDATE_TIME:
-                        engine.handleUpdateTimeMessage();
-                        break;
-                }
+            Engine engine = mWeakReference.get();
+            if (engine != null && msg.what == MSG_UPDATE_TIME) {
+                engine.handleUpdateTimeMessage();
             }
         }
     }
 
     private class Engine extends CanvasWatchFaceService.Engine {
-        private Calendar mCalendar;
-        private boolean mRegisteredTimeZoneReceiver = false;
-        private Paint mBackgroundPaint;
-        private Paint mTextPaint;
-        private boolean mAmbient;
-        private boolean mLowBitAmbient;
-        private boolean mBurnInProtection;
-        private int mTic;
-        private String mToken;
-        private String mId;
-        private String mValueInMgPerDl;
-        private final Handler mUpdateTimeHandler = new EngineHandler(this);
-        // Runnable pour effectuer l'appel API périodiquement
-        private final Runnable mFetchDataRunnable = new Runnable() {
+        private Calendar calendar;
+        private Paint backgroundPaint;
+        private Paint textPaint;
+        private Paint glucosePaint;
+        private Paint batteryPaint;
+
+        private boolean ambient;
+        private int tic;
+        private String valueInMgPerDl = "Chargement...";
+        private String batteryLevel = "Chargement...";
+        private String correction = "Chargement...";
+
+        private final Handler updateTimeHandler = new EngineHandler(this);
+
+        private final Runnable fetchDataRunnable = new Runnable() {
             @Override
             public void run() {
-                fetchDataFromApi(); // Appeler la méthode pour récupérer les données de l'API
-                mHandler.postDelayed(this, UPDATE_INTERVAL_MS); // Planifier le prochain appel
+                fetchDataFromApi();
+                mainHandler.postDelayed(this, UPDATE_INTERVAL_MS);
             }
         };
-        private void fetchDataFromApi() {
-            // Exécuter l'appel API de manière asynchrone
-            new Thread(new Runnable() {
-                @Override
-                public void run() {
-                    System.out.println("Fetching data from API...");
-                    try {
-                        JSONObject cgmData = apiManager.getCGMData(mToken, mId).getJSONObject("data").getJSONObject("connection");
-                        JSONObject GlucoseMeasurment = cgmData.getJSONObject("glucoseMeasurement");
-                        mValueInMgPerDl = GlucoseMeasurment.getString("ValueInMgPerDl");
-                        // Demander à redessiner l'UI après avoir obtenu les données
 
-                    } catch (JSONException | IOException e) {
-                        System.out.println("exception :"+e.getMessage());
-                        mValueInMgPerDl = e.getMessage();
-                        e.printStackTrace();
-                    }
-                    invalidate();
+        private void fetchDataFromApi() {
+            new Thread(() -> {
+                try {
+                    credentialsManager = new CredentialsManager("test", "test");
+                    apiManager = new ApiManager();
+                    glucoseManager = new GlucoseManager(apiManager);
+
+                    String glucoseValue = glucoseManager.getLatestValue(
+                            credentialsManager.getToken(),
+                            credentialsManager.getPatientIdSha256(),
+                            credentialsManager.getPatientId()
+                    );
+
+                    valueInMgPerDl = glucoseValue + " mg/dL";
+                    correction = glucoseManager.getCorrection(glucoseValue);
+                    // Update glucose color based on value
+                    updateGlucoseColor(glucoseValue);
+
+                } catch (JSONException | IOException e) {
+                    valueInMgPerDl = "Erreur de données";
+                    e.printStackTrace();
                 }
+
+                // Fetch battery level
+                batteryLevel = getBatteryLevel();
+
+                // Force UI update on main thread
+                mainHandler.post(this::invalidate);
             }).start();
         }
 
-        // Méthode pour démarrer la mise à jour périodique
-        private void startPeriodicUpdates() {
-            // Planifier le premier appel après un délai initial
-            mHandler.postDelayed(mFetchDataRunnable, UPDATE_INTERVAL_MS);
+        private String getBatteryLevel() {
+            BatteryManager bm = (BatteryManager) getSystemService(BATTERY_SERVICE);
+            int level = bm != null ? bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY) : -1;
+            return level + "%";
         }
 
-        // Méthode pour arrêter la mise à jour périodique
-        private void stopPeriodicUpdates() {
-            mHandler.removeCallbacks(mFetchDataRunnable);
+        private void updateGlucoseColor(String glucoseValueString) {
+            if (glucoseValueString == "Chargement..." || glucoseValueString == "Erreur de données") {
+                glucosePaint.setColor(Color.WHITE);
+            }
+            int glucoseValue = Integer.parseInt(glucoseValueString);
+
+            // Update glucose color based on value range
+            if (glucoseValue < 70) {
+                glucosePaint.setColor(Color.BLUE);  // Low glucose - blue
+            } else if (glucoseValue >= 70 && glucoseValue <= 140) {
+                glucosePaint.setColor(Color.GREEN);  // Normal glucose - green
+            } else {
+                glucosePaint.setColor(Color.RED);  // High glucose - red
+            }
         }
 
         @Override
         public void onCreate(SurfaceHolder holder) {
             super.onCreate(holder);
 
-            startPeriodicUpdates();
-
             setWatchFaceStyle(new WatchFaceStyle.Builder(MyDiabetyFace.this)
                     .setAcceptsTapEvents(true)
                     .build());
 
-            mCalendar = Calendar.getInstance();
+            calendar = Calendar.getInstance();
 
-            mBackgroundPaint = new Paint();
-            mBackgroundPaint.setColor(Color.GREEN);
+            backgroundPaint = new Paint();
+            backgroundPaint.setColor(Color.BLACK);
 
-            mTextPaint = new Paint();
-            mTextPaint.setColor(Color.WHITE);
-            mTextPaint.setTextSize(50f); // Taille du texte en pixels
-            mTextPaint.setAntiAlias(true);
-            mTextPaint.setTextAlign(Paint.Align.CENTER);
-            mTic = 0;
-            mToken = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjFiZWU0MjM2LTljZDItZTYxMS04MTI4LTA2MTBlNmUzOGNiZCIsImZpcnN0TmFtZSI6Ik1hcm91YW5lIiwibGFzdE5hbWUiOiJOaWxsaSIsImNvdW50cnkiOiJGUiIsInJlZ2lvbiI6ImZyIiwicm9sZSI6InBhdGllbnQiLCJ1bml0cyI6MSwicHJhY3RpY2VzIjpbXSwiYyI6MSwicyI6ImxsdS5hbmRyb2lkIiwiZXhwIjoxNzM0NjM2NTE2fQ.c9iozBFOp1SNZFs9WuIZ_tuYx_In-ffgUS2SfbiDMrA";
-            mId = "1bee4236-9cd2-e611-8128-0610e6e38cbd";
-            mValueInMgPerDl = "pas d'information";
+            textPaint = new Paint();
+            textPaint.setColor(Color.WHITE);
+            textPaint.setTextSize(50f);
+            textPaint.setAntiAlias(true);
+            textPaint.setTextAlign(Paint.Align.CENTER);
 
+            glucosePaint = new Paint();
+            glucosePaint.setTextSize(40f);
+            glucosePaint.setAntiAlias(true);
+            glucosePaint.setTextAlign(Paint.Align.CENTER);
+
+            batteryPaint = new Paint();
+            batteryPaint.setColor(Color.YELLOW); // Set battery text color
+            batteryPaint.setTextSize(30f);
+            batteryPaint.setAntiAlias(true);
+            batteryPaint.setTextAlign(Paint.Align.CENTER);
+
+            fetchDataFromApi(); // Initial fetch
+            startPeriodicUpdates();
+        }
+
+        private void startPeriodicUpdates() {
+            mainHandler.postDelayed(fetchDataRunnable, UPDATE_INTERVAL_MS);
+        }
+
+        private void stopPeriodicUpdates() {
+            mainHandler.removeCallbacks(fetchDataRunnable);
         }
 
         @Override
         public void onDestroy() {
-            mUpdateTimeHandler.removeMessages(MSG_UPDATE_TIME);
+            updateTimeHandler.removeMessages(MSG_UPDATE_TIME);
+            stopPeriodicUpdates();
             super.onDestroy();
-        }
-
-        @Override
-        public void onPropertiesChanged(Bundle properties) {
-            super.onPropertiesChanged(properties);
-            mLowBitAmbient = properties.getBoolean(PROPERTY_LOW_BIT_AMBIENT, false);
-            mBurnInProtection = properties.getBoolean(PROPERTY_BURN_IN_PROTECTION, false);
         }
 
         @Override
         public void onTimeTick() {
             super.onTimeTick();
-
             invalidate();
-            mTic = (mTic + 1) % 60;
+            tic = (tic + 1) % 60;
         }
 
         @Override
         public void onAmbientModeChanged(boolean inAmbientMode) {
             super.onAmbientModeChanged(inAmbientMode);
-            mAmbient = inAmbientMode;
+            ambient = inAmbientMode;
             invalidate();
-            updateWatchPaints();
             updateTimer();
-        }
-
-        @Override
-        public void onInterruptionFilterChanged(int interruptionFilter) {
-            super.onInterruptionFilterChanged(interruptionFilter);
-            boolean inMuteMode = (interruptionFilter == WatchFaceService.INTERRUPTION_FILTER_NONE);
-
-            // Redraw the watch face based on mute mode
-            if (inMuteMode) {
-                // Adjust paint colors or other visual elements for mute mode
-            } else {
-                // Restore normal paint colors or elements
-            }
-        }
-
-        @Override
-        public void onSurfaceChanged(SurfaceHolder holder, int format, int width, int height) {
-            super.onSurfaceChanged(holder, format, width, height);
-            // Perform any setup or resizing necessary based on the surface dimensions.
         }
 
         @Override
@@ -189,41 +200,22 @@ public class MyDiabetyFace extends CanvasWatchFaceService {
             super.onVisibilityChanged(visible);
 
             if (visible) {
-                registerReceiver();
-                mCalendar.setTimeZone(TimeZone.getDefault());
+                calendar.setTimeZone(TimeZone.getDefault());
                 invalidate();
-            } else {
-                unregisterReceiver();
             }
 
             updateTimer();
         }
 
-        private void registerReceiver() {
-            if (mRegisteredTimeZoneReceiver) {
-                return;
-            }
-            mRegisteredTimeZoneReceiver = true;
-            // Register the time zone receiver here if needed
-        }
-
-        private void unregisterReceiver() {
-            if (!mRegisteredTimeZoneReceiver) {
-                return;
-            }
-            mRegisteredTimeZoneReceiver = false;
-            // Unregister the time zone receiver here if needed
-        }
-
         private void updateTimer() {
-            mUpdateTimeHandler.removeMessages(MSG_UPDATE_TIME);
+            updateTimeHandler.removeMessages(MSG_UPDATE_TIME);
             if (shouldTimerBeRunning()) {
-                mUpdateTimeHandler.sendEmptyMessage(MSG_UPDATE_TIME);
+                updateTimeHandler.sendEmptyMessage(MSG_UPDATE_TIME);
             }
         }
 
         private boolean shouldTimerBeRunning() {
-            return isVisible() && !mAmbient;
+            return isVisible() && !ambient;
         }
 
         private void handleUpdateTimeMessage() {
@@ -231,49 +223,62 @@ public class MyDiabetyFace extends CanvasWatchFaceService {
             if (shouldTimerBeRunning()) {
                 long timeMs = System.currentTimeMillis();
                 long delayMs = INTERACTIVE_UPDATE_RATE_MS - (timeMs % INTERACTIVE_UPDATE_RATE_MS);
-                mUpdateTimeHandler.sendEmptyMessageDelayed(MSG_UPDATE_TIME, delayMs);
+                updateTimeHandler.sendEmptyMessageDelayed(MSG_UPDATE_TIME, delayMs);
             }
-        }
-
-        @Override
-        public void onTapCommand(int tapType, int x, int y, long eventTime) {
-            // Handle tap actions here if needed
         }
 
         @Override
         public void onDraw(Canvas canvas, Rect bounds) {
-            mCalendar.setTimeInMillis(System.currentTimeMillis());
-            try {
-                drawTime(canvas);
-            } catch (JSONException e) {
-                throw new RuntimeException(e);
-            } catch (IOException e) {
-                throw new RuntimeException(e);
-            }
-        }
+            calendar.setTimeInMillis(System.currentTimeMillis());
 
-        private void drawTime(Canvas canvas) throws JSONException, IOException {
-            String timeText = String.format("%02d:%02d:%02d",
-                    mCalendar.get(Calendar.HOUR_OF_DAY),
-                    mCalendar.get(Calendar.MINUTE),
-                    mCalendar.get(Calendar.SECOND));
             canvas.drawColor(Color.BLACK);
-            float TimeX = canvas.getWidth() / 2f;
-            float TimeY = canvas.getHeight() / 4f;
-            String DateText = String.format("%02d/%02d/%04d",
-                    mCalendar.get(Calendar.DAY_OF_MONTH),
-                    mCalendar.get(Calendar.MONTH) + 1,
-                    mCalendar.get(Calendar.YEAR));
-            float DateX = canvas.getWidth() / 2f;
-            float DateY = canvas.getHeight() / 1.5f;
-            canvas.drawText(DateText, DateX, DateY, mTextPaint);
-            canvas.drawText(timeText, TimeX, TimeY, mTextPaint);
-            canvas.drawText(mValueInMgPerDl, canvas.getWidth() / 2f, canvas.getHeight() / 2f, mTextPaint);
+            String timeText = String.format("%02d:%02d:%02d",
+                    calendar.get(Calendar.HOUR_OF_DAY),
+                    calendar.get(Calendar.MINUTE),
+                    calendar.get(Calendar.SECOND));
 
-        }
+            if (ambient) {
+                // Si la montre est en mode veille, afficher uniquement l'heure
 
-        private void updateWatchPaints() {
-            // Update paints based on ambient mode if needed
-        }
+                float centerX = canvas.getWidth() / 2f;
+                float centerY = canvas.getHeight() / 2f;
+                canvas.drawText(timeText, centerX, centerY, textPaint);  // Afficher uniquement l'heure
+            }
+            else{
+
+                timeText = "🕒 " + timeText;
+
+            String dateText = "📅 " + String.format("%02d/%02d/%04d",
+                    calendar.get(Calendar.DAY_OF_MONTH),
+                    calendar.get(Calendar.MONTH) + 1,
+                    calendar.get(Calendar.YEAR));
+
+            // Center of the circular watch face
+            float centerX = canvas.getWidth() / 2f;
+            float centerY = canvas.getHeight() / 2f;
+            float radius = Math.min(canvas.getWidth(), canvas.getHeight()) / 2f;
+
+            // Offsets for positioning text within the circular watch face
+            float timeYOffset = -radius / 3f;
+            float glucoseYOffset = 0;
+            float dateYOffset = radius / 1.8f;
+            float batteryYOffset = radius / 1.2f;
+            float correctionYOffset = radius / 3f;
+
+            // Draw time at the top
+            canvas.drawText(timeText, centerX, centerY + timeYOffset, textPaint);
+
+            // Draw blood drop emoji and glucose value in the center
+            canvas.drawText("🩸 " + valueInMgPerDl, centerX, centerY + glucoseYOffset, glucosePaint);
+            canvas.drawText("\uD83D\uDC89" + correction, centerX, centerY + correctionYOffset, glucosePaint);
+
+            // Draw date near the bottom
+            canvas.drawText(dateText, centerX, centerY + dateYOffset, textPaint);
+
+            // Draw battery emoji and level towards the bottom
+            canvas.drawText("🔋 " + batteryLevel, centerX, centerY + batteryYOffset, batteryPaint);
+
+
+        }}
     }
 }
