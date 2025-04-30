@@ -32,7 +32,8 @@ dependencies {
     implementation 'com.google.android.gms:play-services-base:18.0.1'
     implementation 'androidx.palette:palette:1.0.0'
     implementation 'com.squareup.okhttp3:okhttp:4.10.0'
-
+    implementation 'com.google.firebase:firebase-crashlytics-buildtools:3.0.3'
+    implementation 'com.google.guava:guava:30.1-jre'
     // Dépendances pour les tests
     testImplementation 'junit:junit:4.13.2'
     androidTestImplementation 'androidx.test.ext:junit:1.1.5'
